@@ -37,6 +37,9 @@ logs what each blocked request *would* have sent.
 | `dry-run` | Walks the whole flow with all non-GET requests blocked. Records what would have been sent. Nothing lands. |
 | `submit` | Walks the flow for real, once. |
 
+`inspect` is the default, so dispatching the workflow without changing the mode
+reads the page and submits nothing. The run says so in its first and last lines.
+
 Run `dry-run` before `submit`. Download the artifact and check:
 
 - `2-after-choice.png` — what the second step looks like
