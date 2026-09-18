@@ -1,24 +1,57 @@
 /**
- * Submit ONE review to a rating page.
+ * Submit ONE review to the KwikRate rating page.
  *
- * This script performs a single submission per run. There is no loop, no retry
- * after a successful submit, and no batching. If you need to correct a review,
- * fix the text and run it again deliberately.
+ * The real form (confirmed by scripts/inspect.mjs) is a multi-step flow. Step one
+ * is four labelled buttons:
  *
- * Defaults to a dry run: it fills the form and screenshots the result without
- * clicking submit, so you can confirm it targeted the right controls. Set
- * SUBMIT=true to actually send it.
+ *   Very Satisfied | Satisfied | Unsatisfied | Very Unsatisfied
+ *
+ * There is no comment box or submit button on that first screen, so anything
+ * further only appears after a choice is made. This script clicks the choice,
+ * waits for whatever comes next, fills a comment if the next step offers one,
+ * and submits if there is something to submit.
+ *
+ * One run performs one submission. No loop, no batching, no retry after success.
+ *
+ * Dry runs abort every non-GET request, so the flow can be walked end to end
+ * without anything being recorded — necessary here, because clicking a sentiment
+ * button may itself be the submission.
  */
 import { mkdir, writeFile } from 'node:fs/promises';
-import { launch, requireEnv, settle, describeControls } from './lib.mjs';
+import { launch, requireEnv, settle, describeControls, blockMutations, recordMutations } from './lib.mjs';
 
 const OUT = 'out';
+
+const CHOICES = ['Very Satisfied', 'Satisfied', 'Unsatisfied', 'Very Unsatisfied'];
 
 function log(step, msg) {
   console.log(`[${step}] ${msg}`);
 }
 
-/** Return the first locator in the list that resolves to exactly one visible element. */
+/**
+ * Capture the page state. Tolerant of navigation: if the page is mid-flight the
+ * execution context can be torn down under us, and losing a screenshot is not a
+ * reason to abandon a submission that already happened.
+ */
+async function dump(page, name) {
+  try {
+    await page.waitForLoadState('domcontentloaded', { timeout: 10000 });
+  } catch {
+    // Carry on and capture whatever is there.
+  }
+  try {
+    await page.screenshot({ path: `${OUT}/${name}.png`, fullPage: true });
+  } catch (err) {
+    log('dump', `screenshot ${name} failed: ${err.message.split('\n')[0]}`);
+  }
+  try {
+    await writeFile(`${OUT}/${name}.html`, await page.content(), 'utf8');
+    await writeFile(`${OUT}/${name}-controls.json`, JSON.stringify(await describeControls(page), null, 2), 'utf8');
+  } catch (err) {
+    log('dump', `page dump ${name} failed: ${err.message.split('\n')[0]}`);
+  }
+}
+
 async function firstVisible(page, candidates) {
   for (const { label, locator } of candidates) {
     try {
@@ -28,14 +61,17 @@ async function firstVisible(page, candidates) {
         if (await nth.isVisible()) return { label, locator: nth };
       }
     } catch {
-      // A malformed or unsupported selector shouldn't abort the whole search.
+      // An unsupported selector shouldn't abort the whole search.
     }
   }
   return null;
 }
 
-async function selectRating(page, rating) {
-  const n = String(rating);
+/**
+ * Click the sentiment button. Matched on exact accessible name — substring
+ * matching would let "Unsatisfied" select the "Very Unsatisfied" button.
+ */
+async function chooseSentiment(page, choice) {
   const override = process.env.RATING_SELECTOR?.trim();
 
   const candidates = [];
@@ -43,38 +79,21 @@ async function selectRating(page, rating) {
     candidates.push({ label: `RATING_SELECTOR override (${override})`, locator: page.locator(override) });
   }
   candidates.push(
-    { label: `input[type=radio][value="${n}"]`, locator: page.locator(`input[type="radio"][value="${n}"]`) },
-    { label: `[data-value="${n}"]`, locator: page.locator(`[data-value="${n}"]`) },
-    { label: `[data-rating="${n}"]`, locator: page.locator(`[data-rating="${n}"]`) },
-    { label: `[data-score="${n}"]`, locator: page.locator(`[data-score="${n}"]`) },
-    { label: `aria-label containing "${n} star"`, locator: page.locator(`[aria-label*="${n} star" i]`) },
-    { label: `aria-label containing "rate ${n}"`, locator: page.locator(`[aria-label*="rate ${n}" i]`) },
-    { label: `[role=radio][aria-posinset="${n}"]`, locator: page.locator(`[role="radio"][aria-posinset="${n}"]`) },
-    { label: `title containing "${n} star"`, locator: page.locator(`[title*="${n} star" i]`) },
-    { label: `button with exact text "${n}"`, locator: page.getByRole('button', { name: new RegExp(`^\\s*${n}\\s*$`) }) },
+    { label: `button named exactly "${choice}"`, locator: page.getByRole('button', { name: choice, exact: true }) },
+    { label: `any element named exactly "${choice}"`, locator: page.getByText(choice, { exact: true }) },
   );
 
   const found = await firstVisible(page, candidates);
-  if (found) {
-    log('rating', `matched via ${found.label}`);
-    await found.locator.click({ timeout: 10000 });
-    return found.label;
+  if (!found) {
+    throw new Error(
+      `Could not find a "${choice}" button. Re-run the inspect job — the page's ` +
+      `wording may have changed. Current expected options: ${CHOICES.join(', ')}.`
+    );
   }
 
-  // Fallback: star widgets are often N sibling elements with no useful attributes.
-  // Pick the nth child of a rating-ish container, counting from the left.
-  const starGroup = page.locator('[class*="star" i], [class*="rating" i]').locator('visible=true');
-  const groupCount = await starGroup.count();
-  if (groupCount >= Number(rating)) {
-    log('rating', `falling back to positional star widget (element ${rating} of ${groupCount})`);
-    await starGroup.nth(Number(rating) - 1).click({ timeout: 10000 });
-    return `positional star ${rating}/${groupCount}`;
-  }
-
-  throw new Error(
-    'Could not find the rating control. Run the inspect job, look at out/controls.json, ' +
-    'then set RATING_SELECTOR to a CSS selector for the star/score you want.'
-  );
+  log('choice', `matched via ${found.label}`);
+  await found.locator.click({ timeout: 15000 });
+  return found.label;
 }
 
 async function fillComment(page, comment) {
@@ -90,22 +109,19 @@ async function fillComment(page, comment) {
     { label: 'input[name*=feedback]', locator: page.locator('input[name*="feedback" i]') },
     { label: 'input[name*=review]', locator: page.locator('input[name*="review" i]') },
     { label: 'input[placeholder*=comment]', locator: page.locator('input[placeholder*="comment" i]') },
-    { label: 'input[placeholder*=feedback]', locator: page.locator('input[placeholder*="feedback" i]') },
     { label: 'input[placeholder*=tell us]', locator: page.locator('input[placeholder*="tell us" i]') },
+    { label: 'contenteditable', locator: page.locator('[contenteditable="true"]') },
   );
 
   const found = await firstVisible(page, candidates);
-  if (!found) {
-    log('comment', 'no comment field found — submitting the rating on its own');
-    return null;
-  }
+  if (!found) return null;
 
   log('comment', `matched via ${found.label}`);
   await found.locator.fill(comment, { timeout: 10000 });
   return found.label;
 }
 
-async function clickSubmit(page) {
+async function findSubmit(page) {
   const override = process.env.SUBMIT_SELECTOR?.trim();
 
   const candidates = [];
@@ -115,71 +131,123 @@ async function clickSubmit(page) {
   candidates.push(
     { label: 'button[type=submit]', locator: page.locator('button[type="submit"]') },
     { label: 'input[type=submit]', locator: page.locator('input[type="submit"]') },
-    { label: 'button named submit/send/rate/done', locator: page.getByRole('button', { name: /submit|send|rate|finish|done|continue/i }) },
+    { label: 'button named submit/send/done', locator: page.getByRole('button', { name: /^(submit|send|done|finish|continue|next)$/i }) },
+    { label: 'button containing submit/send', locator: page.getByRole('button', { name: /submit|send feedback|send review/i }) },
   );
 
-  const found = await firstVisible(page, candidates);
-  if (!found) {
-    throw new Error(
-      'Could not find the submit button. Run the inspect job and set SUBMIT_SELECTOR ' +
-      'to a CSS selector for it.'
-    );
+  return firstVisible(page, candidates);
+}
+
+/**
+ * Say plainly whether anything actually reached the server. A page that looks
+ * like it accepted the review proves nothing on its own.
+ */
+function reportOutcome(sent, navigations = []) {
+  console.log('\n--- Did it post? ---');
+
+  if (sent.length === 0) {
+    console.log('INCONCLUSIVE: the page sent no state-changing request at all.');
+    if (navigations.length > 1) {
+      console.log('The page did navigate, so something happened:');
+      for (const url of navigations) console.log(`  -> ${url}`);
+      console.log('If the last URL looks like a confirmation page, it probably went through.');
+    } else {
+      console.log('The page never navigated either, so most likely nothing was sent.');
+    }
+    console.log('Check out/4-final.png to see what the page is showing.');
+    return;
   }
 
-  log('submit', `matched via ${found.label}`);
-  await found.locator.click({ timeout: 15000 });
-  return found.label;
+  const succeeded = sent.filter((r) => r.ok);
+  const failed = sent.filter((r) => !r.ok);
+
+  for (const r of sent) {
+    const verdict = r.ok ? `HTTP ${r.status}` : r.failure ? `FAILED (${r.failure})` : `HTTP ${r.status}`;
+    console.log(`  ${r.method} ${r.url} -> ${verdict}`);
+  }
+
+  if (succeeded.length > 0 && failed.length === 0) {
+    const navPosts = succeeded.filter((r) => r.isNavigation).length;
+    const via = navPosts > 0 ? ` (${navPosts} as a page navigation)` : '';
+    console.log(`\nPOSTED: ${succeeded.length} request(s) accepted by the server${via}.`);
+  } else if (succeeded.length > 0) {
+    console.log(`\nPARTIAL: ${succeeded.length} accepted, ${failed.length} failed. Check the list above.`);
+  } else {
+    console.log('\nNOT POSTED: every state-changing request failed or was rejected.');
+  }
+
+  console.log('Full detail, including request and response bodies: out/sent-requests.json');
 }
 
 async function main() {
   const url = requireEnv('REVIEW_URL');
+  const choice = (process.env.REVIEW_CHOICE || 'Very Unsatisfied').trim();
   const comment = process.env.REVIEW_COMMENT?.trim() ?? '';
-  const rating = Number(process.env.REVIEW_RATING ?? '1');
   const reallySubmit = process.env.SUBMIT === 'true';
 
-  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-    throw new Error(`REVIEW_RATING must be an integer from 1 to 5, got: ${process.env.REVIEW_RATING}`);
+  if (!CHOICES.includes(choice)) {
+    throw new Error(`REVIEW_CHOICE must be one of: ${CHOICES.join(' | ')} — got "${choice}"`);
   }
 
-  console.log(`URL      : ${url}`);
-  console.log(`Rating   : ${rating}`);
-  console.log(`Comment  : ${comment ? `${comment.length} chars` : '(none)'}`);
-  console.log(`Mode     : ${reallySubmit ? 'SUBMIT (one review will be sent)' : 'DRY RUN (nothing will be sent)'}\n`);
+  console.log(`URL     : ${url}`);
+  console.log(`Choice  : ${choice}`);
+  console.log(`Comment : ${comment ? `${comment.length} chars` : '(none)'}`);
+  console.log(`Mode    : ${reallySubmit ? 'SUBMIT — one review will be sent' : 'DRY RUN — all non-GET requests will be blocked'}\n`);
 
   await mkdir(OUT, { recursive: true });
   const { browser, page } = await launch();
+  let blocked = [];
+  let recorder = null;
 
   try {
+    if (reallySubmit) recorder = recordMutations(page);
+    else blocked = await blockMutations(page);
+
     const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
     log('load', `HTTP ${response?.status()}`);
     await settle(page);
-    await page.screenshot({ path: `${OUT}/1-loaded.png`, fullPage: true });
+    await dump(page, '1-loaded');
 
-    await selectRating(page, rating);
-    await page.waitForTimeout(500);
+    await chooseSentiment(page, choice);
+    await settle(page, 6000);
+    await dump(page, '2-after-choice');
+    log('choice', `page title is now "${await page.title()}"`);
 
-    if (comment) await fillComment(page, comment);
-    await page.screenshot({ path: `${OUT}/2-filled.png`, fullPage: true });
+    const commentField = comment ? await fillComment(page, comment) : null;
+    if (comment && !commentField) {
+      log('comment', 'no comment field on this step — see out/2-after-choice-controls.json');
+    }
+    if (commentField) await dump(page, '3-filled');
 
-    if (!reallySubmit) {
-      console.log('\nDry run complete — the form is filled but nothing was submitted.');
-      console.log('Check out/2-filled.png. If it looks right, re-run with submit: true.');
-      return;
+    const submit = await findSubmit(page);
+    if (!submit) {
+      log('submit', 'no submit button found — the sentiment click is likely the submission itself');
+    } else if (!reallySubmit) {
+      log('submit', `found submit via ${submit.label} (not clicking — dry run)`);
+    } else {
+      log('submit', `matched via ${submit.label}`);
+      await submit.locator.click({ timeout: 15000 });
+      await settle(page, 8000);
     }
 
-    await clickSubmit(page);
-    await settle(page, 8000);
-    await page.screenshot({ path: `${OUT}/3-submitted.png`, fullPage: true });
-    await writeFile(`${OUT}/after-submit.html`, await page.content(), 'utf8');
-    await writeFile(`${OUT}/after-submit-controls.json`, JSON.stringify(await describeControls(page), null, 2), 'utf8');
+    await dump(page, '4-final');
 
-    console.log('\nSubmitted one review. Confirm it landed by checking out/3-submitted.png.');
+    if (!reallySubmit) {
+      await writeFile(`${OUT}/blocked-requests.json`, JSON.stringify(blocked, null, 2), 'utf8');
+      console.log(`\nDry run complete. ${blocked.length} state-changing request(s) were blocked.`);
+      console.log('Check out/blocked-requests.json to see exactly what a real run would send,');
+      console.log('and out/4-final.png for how far the flow got. Nothing was recorded.');
+    } else {
+      await recorder.settled();
+      await writeFile(`${OUT}/sent-requests.json`, JSON.stringify(recorder.sent, null, 2), 'utf8');
+      reportOutcome(recorder.sent, recorder.navigations);
+    }
   } finally {
     await browser.close();
   }
 }
 
-main().catch(async (err) => {
+main().catch((err) => {
   console.error(`\nFailed: ${err.message}`);
   process.exit(1);
 });

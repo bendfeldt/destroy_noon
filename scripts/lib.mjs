@@ -70,3 +70,96 @@ export async function describeControls(page) {
     return out;
   });
 }
+
+/**
+ * Block every state-changing request (anything that isn't a GET/HEAD) and record
+ * what would have been sent. This is what makes a dry run genuinely dry on a
+ * form that may submit the moment you click something, and it shows us the real
+ * submission endpoint and payload.
+ */
+export async function blockMutations(page) {
+  const blocked = [];
+  await page.route('**/*', async (route) => {
+    const request = route.request();
+    const method = request.method();
+    if (method === 'GET' || method === 'HEAD') return route.continue();
+
+    let body;
+    try {
+      body = request.postData() ?? undefined;
+    } catch {
+      body = '(unreadable)';
+    }
+    blocked.push({ method, url: request.url(), body });
+    console.log(`  [blocked] ${method} ${request.url()}${body ? ` body=${body.slice(0, 400)}` : ''}`);
+    await route.abort();
+  });
+  return blocked;
+}
+
+/**
+ * Record every state-changing request and the server's response to it. This is
+ * the actual evidence a submission landed — a screenshot only proves the page
+ * changed, not that anything was persisted.
+ *
+ * Handles submissions that are full-page navigations as well as XHR/fetch: a
+ * classic form POST shows up as a document request, and the navigation itself is
+ * recorded separately as corroborating evidence.
+ *
+ * Reading a response body is async, so the returned object exposes settled(),
+ * which resolves once every in-flight read has finished. Call it before writing
+ * results out, otherwise a late-arriving response can be missed entirely.
+ */
+export function recordMutations(page) {
+  const sent = [];
+  const navigations = [];
+  const pending = new Set();
+
+  page.on('response', (response) => {
+    const request = response.request();
+    const method = request.method();
+    if (method === 'GET' || method === 'HEAD') return;
+
+    const entry = {
+      method,
+      url: request.url(),
+      status: response.status(),
+      ok: response.ok(),
+      isNavigation: request.isNavigationRequest(),
+    };
+    try {
+      entry.requestBody = request.postData() ?? undefined;
+    } catch {
+      // Not always readable; the status is the part that matters.
+    }
+    sent.push(entry);
+    console.log(`  [sent] ${method} ${request.url()} -> HTTP ${response.status()}${entry.isNavigation ? ' (navigation)' : ''}`);
+
+    // Body reads race with navigation, so track them and tolerate failure.
+    const read = response.text()
+      .then((text) => { if (text) entry.responseBody = text.slice(0, 1000); })
+      .catch(() => { entry.responseBody = '(body unavailable — page navigated away)'; })
+      .finally(() => pending.delete(read));
+    pending.add(read);
+  });
+
+  page.on('requestfailed', (request) => {
+    const method = request.method();
+    if (method === 'GET' || method === 'HEAD') return;
+    const failure = request.failure()?.errorText ?? 'unknown error';
+    sent.push({ method, url: request.url(), status: null, ok: false, failure });
+    console.log(`  [FAILED] ${method} ${request.url()} -> ${failure}`);
+  });
+
+  page.on('framenavigated', (frame) => {
+    if (frame !== page.mainFrame()) return;
+    navigations.push(frame.url());
+    console.log(`  [navigated] ${frame.url()}`);
+  });
+
+  return {
+    sent,
+    navigations,
+    settled: () => Promise.all([...pending]),
+  };
+}
