@@ -103,6 +103,8 @@ const server = createServer(async (req, res) => {
     return json(200, found ? [found] : []);
   }
 
+  if (url.pathname === '/thanks') return html(res, done);
+
   if (url.pathname === '/form') return html(res, step1);
 
   try {

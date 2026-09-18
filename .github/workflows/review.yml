@@ -5,14 +5,14 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'What to do'
+        description: 'What to do (submit sends one review immediately)'
         type: choice
         required: true
-        default: inspect
+        default: submit
         options:
-          - inspect    # dump the form structure + screenshot, click nothing
-          - dry-run    # walk the flow with all non-GET requests blocked
           - submit     # walk the flow for real, once
+          - dry-run    # walk the flow with all non-GET requests blocked
+          - inspect    # dump the form structure + screenshot, click nothing
       choice:
         description: 'Which sentiment button to click'
         type: choice

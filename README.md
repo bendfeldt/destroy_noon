@@ -37,10 +37,11 @@ logs what each blocked request *would* have sent.
 | `dry-run` | Walks the whole flow with all non-GET requests blocked. Records what would have been sent. Nothing lands. |
 | `submit` | Walks the flow for real, once. |
 
-`inspect` is the default, so dispatching the workflow without changing the mode
-reads the page and submits nothing. The run says so in its first and last lines.
+**`submit` is the default mode.** Dispatching the workflow without changing
+anything sends one review immediately. Switch the mode to `dry-run` or `inspect`
+if that is not what you want.
 
-Run `dry-run` before `submit`. Download the artifact and check:
+Run `dry-run` first Download the artifact and check:
 
 - `2-after-choice.png` — what the second step looks like
 - `3-filled.png` — your comment in the box
@@ -86,6 +87,27 @@ means the page never advances, so a dry run can only ever show you step one. If
 the live form turns out to work that way, the dry run will show a single blocked
 request and stop there — that is expected, not a failure. You will not get a
 preview of the comment box before committing to a real run.
+
+### The redirect
+
+Accepting a review redirects the page. That is the application's own confirmation
+that it took the submission, independent of any status code, so the run waits for
+it and reports it:
+
+```
+[submit] redirected to https://kwikrate.com/...
+
+--- Where the page ended up ---
+     https://kwikrate.com/rate/be65d074-...
+  -> https://kwikrate.com/...
+
+  Final URL: https://kwikrate.com/...
+  The page redirected after submitting, which is the site confirming it.
+```
+
+The redirect can arrive after the network goes quiet, so the run waits explicitly
+for the URL to change rather than hoping a fixed delay outlasts it. If no redirect
+comes within 15 seconds it says so and carries on.
 
 ### Read-back check
 
