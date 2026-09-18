@@ -207,7 +207,14 @@ function reportOutcome(all, navigations = []) {
   const sent = all.filter((r) => !isTelemetry(r.url));
   const beacons = all.filter((r) => isTelemetry(r.url));
   if (beacons.length > 0) {
-    console.log(`(ignoring ${beacons.length} analytics beacon(s): ${beacons.map((b) => new URL(b.url).host).join(', ')})`);
+    const hosts = beacons.map((b) => {
+      try {
+        return new URL(b.url).host;
+      } catch {
+        return b.url.slice(0, 60);
+      }
+    });
+    console.log(`(ignoring ${beacons.length} analytics beacon(s): ${hosts.join(', ')})`);
   }
 
   if (sent.length === 0) {
@@ -320,14 +327,24 @@ async function main() {
       console.log('Check out/blocked-requests.json to see exactly what a real run would send,');
       console.log('and out/4-final.png for how far the flow got. Nothing was recorded.');
     } else {
-      await recorder.settled();
-      await writeFile(`${OUT}/sent-requests.json`, JSON.stringify(recorder.sent, null, 2), 'utf8');
-      reportOutcome(recorder.sent, recorder.navigations);
+      // The submission has already happened by this point. Reporting on it must
+      // never fail the run: a red X on a submitted review invites a re-run, and
+      // a re-run means a duplicate review that cannot be taken back.
+      try {
+        await recorder.settled();
+        await writeFile(`${OUT}/sent-requests.json`, JSON.stringify(recorder.sent, null, 2), 'utf8');
+        reportOutcome(recorder.sent, recorder.navigations);
+        reportNavigation(recorder.navigations, page.url(), startUrl);
 
-      reportNavigation(recorder.navigations, page.url(), startUrl);
-
-      const stored = await readBack(page, recorder);
-      if (stored) await writeFile(`${OUT}/read-back.json`, JSON.stringify(stored, null, 2), 'utf8');
+        const stored = await readBack(page, recorder);
+        if (stored) await writeFile(`${OUT}/read-back.json`, JSON.stringify(stored, null, 2), 'utf8');
+      } catch (err) {
+        console.error(`\nReporting failed after the submission: ${err.message.split('\n')[0]}`);
+        console.error('IMPORTANT: this is a reporting error, not a failed submission.');
+        console.error('The review was already sent before this point. Do NOT re-run to');
+        console.error('"try again" — check out/4-final.png and the log above first, or you');
+        console.error('will submit a second review.');
+      }
     }
   } finally {
     await browser.close();

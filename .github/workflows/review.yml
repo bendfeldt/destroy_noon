@@ -34,6 +34,9 @@ on:
         required: true
         default: 'https://kwikrate.com/rate/be65d074-6580-4663-a0fa-016717d7da89'
 
+permissions:
+  contents: read
+
 # One run at a time, and never cancel a run mid-submit.
 concurrency:
   group: submit-review

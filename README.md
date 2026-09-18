@@ -178,6 +178,23 @@ npm run submit
 If Chromium is already installed and Playwright wants a different build, point at
 the existing one with `CHROMIUM_PATH=/path/to/chrome`.
 
+### Tests
+
+```bash
+npm test
+```
+
+Runs the whole flow against the mock server and asserts the behaviours that were
+each found the hard way on a live run — dry runs sending nothing, beacons not
+counted as submissions, the redirect being reported, read-back returning the
+stored comment, a 204 not producing a phantom failure, and exact-name button
+matching. CI runs this on every pull request.
+
+The button-matching check uses `Satisfied`, not `Unsatisfied`. Under substring
+matching `Satisfied` also matches `Very Satisfied`, which comes first in the DOM,
+so the wrong sentiment gets selected. `Unsatisfied` happens to resolve correctly
+either way, so testing it would prove nothing.
+
 ### Testing without touching the live site
 
 `test/mock-form.html` mirrors the real two-step structure — four sentiment

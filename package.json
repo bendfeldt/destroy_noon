@@ -6,7 +6,8 @@
   "description": "Submit a single honest review to a KwikRate rating page.",
   "scripts": {
     "inspect": "node scripts/inspect.mjs",
-    "submit": "node scripts/submit-review.mjs"
+    "submit": "node scripts/submit-review.mjs",
+    "test": "node test/run-tests.mjs"
   },
   "devDependencies": {
     "playwright": "^1.49.0"
