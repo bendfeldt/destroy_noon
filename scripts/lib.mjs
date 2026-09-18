@@ -163,3 +163,29 @@ export function recordMutations(page) {
     settled: () => Promise.all([...pending]),
   };
 }
+
+/**
+ * Analytics and error-reporting beacons fire alongside real traffic and are not
+ * evidence of anything. The live run counted a Cloudflare RUM beacon among its
+ * "3 requests accepted", which inflates the number and could let a genuinely
+ * failed submission read as a partial success.
+ */
+const TELEMETRY_PATTERNS = [
+  /\/cdn-cgi\/(rum|beacon|challenge-platform)/i,
+  /google-analytics\.com/i,
+  /googletagmanager\.com/i,
+  /doubleclick\.net/i,
+  /\.sentry\.io|sentry_key=|\/envelope\//i,
+  /segment\.(io|com)/i,
+  /plausible\.io/i,
+  /posthog\.com/i,
+  /mixpanel\.com/i,
+  /hotjar\.(com|io)/i,
+  /clarity\.ms/i,
+  /datadoghq\.com/i,
+  /newrelic\.com|nr-data\.net/i,
+];
+
+export function isTelemetry(url) {
+  return TELEMETRY_PATTERNS.some((re) => re.test(url));
+}

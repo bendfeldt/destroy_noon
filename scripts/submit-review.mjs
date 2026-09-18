@@ -18,7 +18,7 @@
  * button may itself be the submission.
  */
 import { mkdir, writeFile } from 'node:fs/promises';
-import { launch, requireEnv, settle, describeControls, blockMutations, recordMutations } from './lib.mjs';
+import { launch, requireEnv, settle, describeControls, blockMutations, recordMutations, isTelemetry } from './lib.mjs';
 
 const OUT = 'out';
 
@@ -142,11 +142,19 @@ async function findSubmit(page) {
  * Say plainly whether anything actually reached the server. A page that looks
  * like it accepted the review proves nothing on its own.
  */
-function reportOutcome(sent, navigations = []) {
+function reportOutcome(all, navigations = []) {
   console.log('\n--- Did it post? ---');
 
+  // Analytics beacons are not evidence of a submission; count them separately.
+  const sent = all.filter((r) => !isTelemetry(r.url));
+  const beacons = all.filter((r) => isTelemetry(r.url));
+  if (beacons.length > 0) {
+    console.log(`(ignoring ${beacons.length} analytics beacon(s): ${beacons.map((b) => new URL(b.url).host).join(', ')})`);
+  }
+
   if (sent.length === 0) {
-    console.log('INCONCLUSIVE: the page sent no state-changing request at all.');
+    const extra = beacons.length > 0 ? ' (only analytics beacons)' : '';
+    console.log(`INCONCLUSIVE: the page sent no state-changing request at all${extra}.`);
     if (navigations.length > 1) {
       console.log('The page did navigate, so something happened:');
       for (const url of navigations) console.log(`  -> ${url}`);

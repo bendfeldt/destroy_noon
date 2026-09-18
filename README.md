@@ -58,6 +58,10 @@ it, then prints a verdict:
 POSTED: 1 request(s) accepted by the server.
 ```
 
+Analytics beacons (Cloudflare RUM, Sentry, Google Analytics and similar) are
+recognised and excluded from the count — they fire alongside real traffic and
+prove nothing. They are still listed, just not counted as a submission.
+
 Three outcomes:
 
 - **POSTED** — the server accepted it. `out/sent-requests.json` has the exact
