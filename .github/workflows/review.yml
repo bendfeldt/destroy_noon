@@ -27,7 +27,7 @@ on:
         description: 'Your review text (used if the next step offers a comment box)'
         type: string
         required: false
-        default: ''
+        default: 'The food is consistently bland and unimaginative, and there is no meaningful choice at the counter. We are told what we are eating rather than asked. For a service we are effectively required to use, that is not acceptable.'
       url:
         description: 'Rating page URL'
         type: string
