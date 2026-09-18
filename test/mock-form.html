@@ -1,0 +1,44 @@
+<!doctype html>
+<!-- A stand-in rating page, so the selector heuristics can be tested without
+     touching the real site. Star widget with no useful attributes on purpose. -->
+<html lang="en">
+<head><meta charset="utf-8"><title>Rate your meal</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 34rem; margin: 3rem auto; padding: 0 1rem; }
+  .stars { display: flex; gap: .5rem; font-size: 2.5rem; cursor: pointer; }
+  .star { color: #ccc; }
+  .star.on { color: #f5b301; }
+  textarea { width: 100%; height: 7rem; margin-top: 1rem; font: inherit; padding: .5rem; }
+  button { margin-top: 1rem; padding: .6rem 1.4rem; font: inherit; }
+  #thanks { display: none; color: #2a7; font-weight: 600; }
+</style></head>
+<body>
+  <h1>Rate your meal</h1>
+  <p>How was the food today?</p>
+  <form id="form">
+    <div class="stars" id="stars">
+      <span class="star" data-value="1">&#9733;</span>
+      <span class="star" data-value="2">&#9733;</span>
+      <span class="star" data-value="3">&#9733;</span>
+      <span class="star" data-value="4">&#9733;</span>
+      <span class="star" data-value="5">&#9733;</span>
+    </div>
+    <textarea name="comment" placeholder="Tell us more (optional)"></textarea>
+    <button type="submit">Submit rating</button>
+  </form>
+  <p id="thanks">Thanks for your feedback!</p>
+<script>
+  let picked = 0;
+  document.querySelectorAll('.star').forEach(s => s.addEventListener('click', () => {
+    picked = Number(s.dataset.value);
+    document.querySelectorAll('.star').forEach(o =>
+      o.classList.toggle('on', Number(o.dataset.value) <= picked));
+  }));
+  document.getElementById('form').addEventListener('submit', e => {
+    e.preventDefault();
+    console.log('SUBMITTED', picked, document.querySelector('textarea').value);
+    document.getElementById('form').style.display = 'none';
+    document.getElementById('thanks').style.display = 'block';
+  });
+</script>
+</body></html>

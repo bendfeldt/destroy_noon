@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Playwright run output (screenshots, page dumps)
+out/
+node_modules/

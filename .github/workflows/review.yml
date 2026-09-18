@@ -1,0 +1,88 @@
+name: Submit review
+
+# Manual only. One run submits at most one review.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'What to do'
+        type: choice
+        required: true
+        default: inspect
+        options:
+          - inspect    # dump the form structure + screenshot, touch nothing
+          - dry-run    # fill the form, screenshot it, do NOT submit
+          - submit     # fill the form and submit it once
+      rating:
+        description: 'Star rating (1 = worst)'
+        type: choice
+        required: true
+        default: '1'
+        options: ['1', '2', '3', '4', '5']
+      comment:
+        description: 'Your review text'
+        type: string
+        required: false
+        default: ''
+      url:
+        description: 'Rating page URL'
+        type: string
+        required: true
+        default: 'https://kwikrate.com/rate/be65d074-6580-4663-a0fa-016717d7da89'
+
+# One run at a time, and never cancel a run mid-submit.
+concurrency:
+  group: submit-review
+  cancel-in-progress: false
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Inspect the form
+        if: inputs.mode == 'inspect'
+        env:
+          REVIEW_URL: ${{ inputs.url }}
+        run: npm run inspect
+
+      - name: Fill the form without submitting
+        if: inputs.mode == 'dry-run'
+        env:
+          REVIEW_URL: ${{ inputs.url }}
+          REVIEW_RATING: ${{ inputs.rating }}
+          REVIEW_COMMENT: ${{ inputs.comment }}
+          SUBMIT: 'false'
+        run: npm run submit
+
+      - name: Submit one review
+        if: inputs.mode == 'submit'
+        env:
+          REVIEW_URL: ${{ inputs.url }}
+          REVIEW_RATING: ${{ inputs.rating }}
+          REVIEW_COMMENT: ${{ inputs.comment }}
+          SUBMIT: 'true'
+        run: npm run submit
+
+      - name: Upload screenshots and page dumps
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-${{ inputs.mode }}-${{ github.run_id }}
+          path: out/
+          if-no-files-found: warn
+          retention-days: 7
