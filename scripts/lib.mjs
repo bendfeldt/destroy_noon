@@ -70,3 +70,29 @@ export async function describeControls(page) {
     return out;
   });
 }
+
+/**
+ * Block every state-changing request (anything that isn't a GET/HEAD) and record
+ * what would have been sent. This is what makes a dry run genuinely dry on a
+ * form that may submit the moment you click something, and it shows us the real
+ * submission endpoint and payload.
+ */
+export async function blockMutations(page) {
+  const blocked = [];
+  await page.route('**/*', async (route) => {
+    const request = route.request();
+    const method = request.method();
+    if (method === 'GET' || method === 'HEAD') return route.continue();
+
+    let body;
+    try {
+      body = request.postData() ?? undefined;
+    } catch {
+      body = '(unreadable)';
+    }
+    blocked.push({ method, url: request.url(), body });
+    console.log(`  [blocked] ${method} ${request.url()}${body ? ` body=${body.slice(0, 400)}` : ''}`);
+    await route.abort();
+  });
+  return blocked;
+}

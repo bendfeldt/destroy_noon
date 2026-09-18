@@ -1,44 +1,70 @@
 <!doctype html>
-<!-- A stand-in rating page, so the selector heuristics can be tested without
-     touching the real site. Star widget with no useful attributes on purpose. -->
+<!-- Stand-in for the real KwikRate page, mirroring the structure that
+     scripts/inspect.mjs found: four sentiment buttons on step one, with the
+     comment box and submit button only appearing on step two. -->
 <html lang="en">
-<head><meta charset="utf-8"><title>Rate your meal</title>
+<head><meta charset="utf-8"><title>Kwikrate</title>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 34rem; margin: 3rem auto; padding: 0 1rem; }
-  .stars { display: flex; gap: .5rem; font-size: 2.5rem; cursor: pointer; }
-  .star { color: #ccc; }
-  .star.on { color: #f5b301; }
-  textarea { width: 100%; height: 7rem; margin-top: 1rem; font: inherit; padding: .5rem; }
-  button { margin-top: 1rem; padding: .6rem 1.4rem; font: inherit; }
-  #thanks { display: none; color: #2a7; font-weight: 600; }
+  body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1rem; }
+  .choices { display: flex; gap: .75rem; flex-wrap: wrap; }
+  .choices button { display: flex; flex-direction: column; align-items: center;
+    border: 2px solid #d1d5db; border-radius: .5rem; padding: 1rem 1.25rem; font: inherit;
+    background: #fff; cursor: pointer; }
+  .choices button.picked { border-color: #dc2626; background: #fef2f2; }
+  #step2 { display: none; margin-top: 2rem; }
+  textarea { width: 100%; height: 7rem; font: inherit; padding: .5rem; }
+  #done { display: none; color: #2a7; font-weight: 600; margin-top: 2rem; }
 </style></head>
 <body>
-  <h1>Rate your meal</h1>
-  <p>How was the food today?</p>
-  <form id="form">
-    <div class="stars" id="stars">
-      <span class="star" data-value="1">&#9733;</span>
-      <span class="star" data-value="2">&#9733;</span>
-      <span class="star" data-value="3">&#9733;</span>
-      <span class="star" data-value="4">&#9733;</span>
-      <span class="star" data-value="5">&#9733;</span>
-    </div>
-    <textarea name="comment" placeholder="Tell us more (optional)"></textarea>
-    <button type="submit">Submit rating</button>
-  </form>
-  <p id="thanks">Thanks for your feedback!</p>
+  <h1>How was your experience?</h1>
+  <div class="choices" id="step1">
+    <button type="button">Very Satisfied</button>
+    <button type="button">Satisfied</button>
+    <button type="button">Unsatisfied</button>
+    <button type="button">Very Unsatisfied</button>
+  </div>
+
+  <div id="step2">
+    <p>Tell us more</p>
+    <textarea name="comment" placeholder="What went wrong?"></textarea>
+    <p><button type="button" id="send">Submit</button></p>
+  </div>
+
+  <p id="done">Thanks for your feedback!</p>
+
 <script>
-  let picked = 0;
-  document.querySelectorAll('.star').forEach(s => s.addEventListener('click', () => {
-    picked = Number(s.dataset.value);
-    document.querySelectorAll('.star').forEach(o =>
-      o.classList.toggle('on', Number(o.dataset.value) <= picked));
+  let picked = null;
+  document.querySelectorAll('#step1 button').forEach(b => b.addEventListener('click', () => {
+    picked = b.textContent.trim();
+    document.querySelectorAll('#step1 button').forEach(o => o.classList.toggle('picked', o === b));
+    document.getElementById('step2').style.display = 'block';
+    // The real page may well register the choice at this point, so the mock
+    // fires a request here too — a dry run must block it.
+    post('/api/choice', { choice: picked });
   }));
-  document.getElementById('form').addEventListener('submit', e => {
-    e.preventDefault();
-    console.log('SUBMITTED', picked, document.querySelector('textarea').value);
-    document.getElementById('form').style.display = 'none';
-    document.getElementById('thanks').style.display = 'block';
+
+  document.getElementById('send').addEventListener('click', async () => {
+    const text = document.querySelector('textarea').value;
+    post('/api/review', { choice: picked, comment: text });
+    // Shown regardless of the network result — the mock exists to exercise the
+    // script's traversal, not to be a real backend.
+    document.getElementById('step1').style.display = 'none';
+    document.getElementById('step2').style.display = 'none';
+    document.getElementById('done').style.display = 'block';
   });
+
+  async function post(path, payload) {
+    try {
+      await fetch('https://mock.invalid' + path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      return true;
+    } catch (e) {
+      console.log('POST failed (blocked or offline):', path);
+      return false;
+    }
+  }
 </script>
 </body></html>

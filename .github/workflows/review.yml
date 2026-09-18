@@ -10,17 +10,21 @@ on:
         required: true
         default: inspect
         options:
-          - inspect    # dump the form structure + screenshot, touch nothing
-          - dry-run    # fill the form, screenshot it, do NOT submit
-          - submit     # fill the form and submit it once
-      rating:
-        description: 'Star rating (1 = worst)'
+          - inspect    # dump the form structure + screenshot, click nothing
+          - dry-run    # walk the flow with all non-GET requests blocked
+          - submit     # walk the flow for real, once
+      choice:
+        description: 'Which sentiment button to click'
         type: choice
         required: true
-        default: '1'
-        options: ['1', '2', '3', '4', '5']
+        default: 'Very Unsatisfied'
+        options:
+          - 'Very Unsatisfied'
+          - 'Unsatisfied'
+          - 'Satisfied'
+          - 'Very Satisfied'
       comment:
-        description: 'Your review text'
+        description: 'Your review text (used if the next step offers a comment box)'
         type: string
         required: false
         default: ''
@@ -60,11 +64,11 @@ jobs:
           REVIEW_URL: ${{ inputs.url }}
         run: npm run inspect
 
-      - name: Fill the form without submitting
+      - name: Walk the flow without submitting
         if: inputs.mode == 'dry-run'
         env:
           REVIEW_URL: ${{ inputs.url }}
-          REVIEW_RATING: ${{ inputs.rating }}
+          REVIEW_CHOICE: ${{ inputs.choice }}
           REVIEW_COMMENT: ${{ inputs.comment }}
           SUBMIT: 'false'
         run: npm run submit
@@ -73,7 +77,7 @@ jobs:
         if: inputs.mode == 'submit'
         env:
           REVIEW_URL: ${{ inputs.url }}
-          REVIEW_RATING: ${{ inputs.rating }}
+          REVIEW_CHOICE: ${{ inputs.choice }}
           REVIEW_COMMENT: ${{ inputs.comment }}
           SUBMIT: 'true'
         run: npm run submit
