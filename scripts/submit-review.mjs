@@ -18,7 +18,7 @@
  * button may itself be the submission.
  */
 import { mkdir, writeFile } from 'node:fs/promises';
-import { launch, requireEnv, settle, describeControls, blockMutations, recordMutations } from './lib.mjs';
+import { launch, requireEnv, settle, describeControls, blockMutations, recordMutations, isTelemetry } from './lib.mjs';
 
 const OUT = 'out';
 
@@ -139,14 +139,61 @@ async function findSubmit(page) {
 }
 
 /**
+ * Re-fetch the record that was just written, so the stored review can be read
+ * back rather than inferred from a status code. A PATCH that returns 204 proves
+ * the server accepted the change but shows nothing of what it kept.
+ *
+ * Only URLs that address a single record are re-fetched. A collection endpoint
+ * would return everyone else's feedback, which is none of our business.
+ */
+function addressesOneRecord(url) {
+  return /[?&]id=eq\.[^&]+/i.test(url)
+    || /\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\?|$)/i.test(url);
+}
+
+async function readBack(page, recorder) {
+  const targets = recorder.replay.filter((r) => r.method !== 'GET' && addressesOneRecord(r.url));
+
+  console.log('\n--- Read-back check ---');
+  if (targets.length === 0) {
+    console.log('Skipped: no request addressed a single record, so there is nothing');
+    console.log('safe to re-read (a collection endpoint would return other people\'s data).');
+    return null;
+  }
+
+  const results = [];
+  for (const target of targets) {
+    try {
+      const res = await page.request.get(target.url, { headers: target.headers });
+      const body = (await res.text()).replace(/\s+/g, ' ').trim();
+      console.log(`  GET ${target.url} -> HTTP ${res.status()}`);
+      console.log(`      stored: ${body.slice(0, 600)}${body.length > 600 ? ' […]' : ''}`);
+      results.push({ url: target.url, status: res.status(), body: body.slice(0, 2000) });
+    } catch (err) {
+      console.log(`  GET ${target.url} -> failed: ${err.message.split('\n')[0]}`);
+      results.push({ url: target.url, error: err.message.split('\n')[0] });
+    }
+  }
+  return results;
+}
+
+/**
  * Say plainly whether anything actually reached the server. A page that looks
  * like it accepted the review proves nothing on its own.
  */
-function reportOutcome(sent, navigations = []) {
+function reportOutcome(all, navigations = []) {
   console.log('\n--- Did it post? ---');
 
+  // Analytics beacons are not evidence of a submission; count them separately.
+  const sent = all.filter((r) => !isTelemetry(r.url));
+  const beacons = all.filter((r) => isTelemetry(r.url));
+  if (beacons.length > 0) {
+    console.log(`(ignoring ${beacons.length} analytics beacon(s): ${beacons.map((b) => new URL(b.url).host).join(', ')})`);
+  }
+
   if (sent.length === 0) {
-    console.log('INCONCLUSIVE: the page sent no state-changing request at all.');
+    const extra = beacons.length > 0 ? ' (only analytics beacons)' : '';
+    console.log(`INCONCLUSIVE: the page sent no state-changing request at all${extra}.`);
     if (navigations.length > 1) {
       console.log('The page did navigate, so something happened:');
       for (const url of navigations) console.log(`  -> ${url}`);
@@ -164,6 +211,14 @@ function reportOutcome(sent, navigations = []) {
   for (const r of sent) {
     const verdict = r.ok ? `HTTP ${r.status}` : r.failure ? `FAILED (${r.failure})` : `HTTP ${r.status}`;
     console.log(`  ${r.method} ${r.url} -> ${verdict}`);
+    // Print what the server sent back. A status code says it was accepted; the
+    // body is what shows the review as the server actually stored it.
+    if (r.responseBody) {
+      const body = r.responseBody.replace(/\s+/g, ' ').trim();
+      console.log(`      server replied: ${body.slice(0, 500)}${body.length > 500 ? ' […]' : ''}`);
+    } else if (r.ok && r.status === 204) {
+      console.log('      server replied: (204 No Content — accepted, nothing returned)');
+    }
   }
 
   if (succeeded.length > 0 && failed.length === 0) {
@@ -241,6 +296,9 @@ async function main() {
       await recorder.settled();
       await writeFile(`${OUT}/sent-requests.json`, JSON.stringify(recorder.sent, null, 2), 'utf8');
       reportOutcome(recorder.sent, recorder.navigations);
+
+      const stored = await readBack(page, recorder);
+      if (stored) await writeFile(`${OUT}/read-back.json`, JSON.stringify(stored, null, 2), 'utf8');
     }
   } finally {
     await browser.close();

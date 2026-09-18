@@ -15,11 +15,15 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const port = Number(process.argv[2] ?? 8787);
 
 const CHOICES = ['Very Satisfied', 'Satisfied', 'Unsatisfied', 'Very Unsatisfied'];
+
+/** In-memory store standing in for the ratings table. */
+const records = new Map();
 
 const page = (body) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>Kwikrate</title><style>
@@ -56,18 +60,47 @@ const html = (res, body) => {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
-  if (req.method === 'POST') {
+  const json = (status, payload) => {
+    res.writeHead(status, { 'content-type': 'application/json' });
+    res.end(payload === undefined ? '' : JSON.stringify(payload));
+  };
+
+  if (req.method === 'POST' || req.method === 'PATCH') {
     const body = await readBody(req);
-    console.log(`POST ${url.pathname} ${body}`);
+    console.log(`${req.method} ${url.pathname}${url.search} ${body}`);
 
     if (url.pathname === '/form/step2') {
       return html(res, step2(new URLSearchParams(body).get('choice') ?? ''));
     }
-    if (url.pathname === '/form/done') {
-      return html(res, done);
+    if (url.pathname === '/form/done') return html(res, done);
+
+    // Minimal PostgREST stand-in: POST creates and returns the row, PATCH
+    // merges into it and returns 204, matching what the live backend does.
+    if (url.pathname === '/rest/v1/ratings') {
+      const payload = JSON.parse(body || '{}');
+      const idFilter = url.searchParams.get('id');
+
+      if (req.method === 'POST') {
+        const id = randomUUID();
+        records.set(id, { id, ...payload, comment: null });
+        return json(201, [records.get(id)]);
+      }
+
+      const id = (idFilter ?? '').replace(/^eq\./, '');
+      const existing = records.get(id);
+      if (!existing) return json(404, { message: 'not found' });
+      records.set(id, { ...existing, ...payload });
+      return json(204);
     }
-    res.writeHead(200, { 'content-type': 'application/json' });
-    return res.end(JSON.stringify({ ok: true, received: JSON.parse(body || '{}') }));
+
+    return json(200, { ok: true, received: JSON.parse(body || '{}') });
+  }
+
+  if (url.pathname === '/rest/v1/ratings') {
+    const id = (url.searchParams.get('id') ?? '').replace(/^eq\./, '');
+    console.log(`GET ${url.pathname}${url.search}`);
+    const found = records.get(id);
+    return json(200, found ? [found] : []);
   }
 
   if (url.pathname === '/form') return html(res, step1);
