@@ -172,6 +172,14 @@ function reportOutcome(all, navigations = []) {
   for (const r of sent) {
     const verdict = r.ok ? `HTTP ${r.status}` : r.failure ? `FAILED (${r.failure})` : `HTTP ${r.status}`;
     console.log(`  ${r.method} ${r.url} -> ${verdict}`);
+    // Print what the server sent back. A status code says it was accepted; the
+    // body is what shows the review as the server actually stored it.
+    if (r.responseBody) {
+      const body = r.responseBody.replace(/\s+/g, ' ').trim();
+      console.log(`      server replied: ${body.slice(0, 500)}${body.length > 500 ? ' […]' : ''}`);
+    } else if (r.ok && r.status === 204) {
+      console.log('      server replied: (204 No Content — accepted, nothing returned)');
+    }
   }
 
   if (succeeded.length > 0 && failed.length === 0) {
