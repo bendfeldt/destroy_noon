@@ -18,7 +18,7 @@
  * button may itself be the submission.
  */
 import { mkdir, writeFile } from 'node:fs/promises';
-import { launch, requireEnv, settle, describeControls, blockMutations } from './lib.mjs';
+import { launch, requireEnv, settle, describeControls, blockMutations, recordMutations } from './lib.mjs';
 
 const OUT = 'out';
 
@@ -120,6 +120,39 @@ async function findSubmit(page) {
   return firstVisible(page, candidates);
 }
 
+/**
+ * Say plainly whether anything actually reached the server. A page that looks
+ * like it accepted the review proves nothing on its own.
+ */
+function reportOutcome(sent) {
+  console.log('\n--- Did it post? ---');
+
+  if (sent.length === 0) {
+    console.log('INCONCLUSIVE: the page sent no state-changing request at all.');
+    console.log('Either the form posts in a way this missed, or nothing was recorded.');
+    console.log('Check out/4-final.png to see what the page is showing.');
+    return;
+  }
+
+  const succeeded = sent.filter((r) => r.ok);
+  const failed = sent.filter((r) => !r.ok);
+
+  for (const r of sent) {
+    const verdict = r.ok ? `HTTP ${r.status}` : r.failure ? `FAILED (${r.failure})` : `HTTP ${r.status}`;
+    console.log(`  ${r.method} ${r.url} -> ${verdict}`);
+  }
+
+  if (succeeded.length > 0 && failed.length === 0) {
+    console.log(`\nPOSTED: ${succeeded.length} request(s) accepted by the server.`);
+  } else if (succeeded.length > 0) {
+    console.log(`\nPARTIAL: ${succeeded.length} accepted, ${failed.length} failed. Check the list above.`);
+  } else {
+    console.log('\nNOT POSTED: every state-changing request failed or was rejected.');
+  }
+
+  console.log('Full detail, including request and response bodies: out/sent-requests.json');
+}
+
 async function main() {
   const url = requireEnv('REVIEW_URL');
   const choice = (process.env.REVIEW_CHOICE || 'Very Unsatisfied').trim();
@@ -138,9 +171,11 @@ async function main() {
   await mkdir(OUT, { recursive: true });
   const { browser, page } = await launch();
   let blocked = [];
+  let sent = [];
 
   try {
-    if (!reallySubmit) blocked = await blockMutations(page);
+    if (reallySubmit) sent = recordMutations(page);
+    else blocked = await blockMutations(page);
 
     const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
     log('load', `HTTP ${response?.status()}`);
@@ -177,7 +212,8 @@ async function main() {
       console.log('Check out/blocked-requests.json to see exactly what a real run would send,');
       console.log('and out/4-final.png for how far the flow got. Nothing was recorded.');
     } else {
-      console.log('\nSubmitted one review. Confirm it landed by checking out/4-final.png.');
+      await writeFile(`${OUT}/sent-requests.json`, JSON.stringify(sent, null, 2), 'utf8');
+      reportOutcome(sent);
     }
   } finally {
     await browser.close();

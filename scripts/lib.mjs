@@ -96,3 +96,43 @@ export async function blockMutations(page) {
   });
   return blocked;
 }
+
+/**
+ * Record every state-changing request and the server's response to it. This is
+ * the actual evidence a submission landed — a screenshot only proves the page
+ * changed, not that anything was persisted.
+ */
+export function recordMutations(page) {
+  const sent = [];
+
+  page.on('response', async (response) => {
+    const request = response.request();
+    const method = request.method();
+    if (method === 'GET' || method === 'HEAD') return;
+
+    const entry = { method, url: request.url(), status: response.status(), ok: response.ok() };
+    try {
+      entry.requestBody = request.postData() ?? undefined;
+    } catch {
+      // Not always readable; the status is the part that matters.
+    }
+    try {
+      const text = await response.text();
+      if (text) entry.responseBody = text.slice(0, 1000);
+    } catch {
+      // Body may be unavailable for redirects or opaque responses.
+    }
+    sent.push(entry);
+    console.log(`  [sent] ${method} ${request.url()} -> HTTP ${response.status()}`);
+  });
+
+  page.on('requestfailed', (request) => {
+    const method = request.method();
+    if (method === 'GET' || method === 'HEAD') return;
+    const failure = request.failure()?.errorText ?? 'unknown error';
+    sent.push({ method, url: request.url(), status: null, ok: false, failure });
+    console.log(`  [FAILED] ${method} ${request.url()} -> ${failure}`);
+  });
+
+  return sent;
+}

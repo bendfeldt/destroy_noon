@@ -55,7 +55,7 @@
 
   async function post(path, payload) {
     try {
-      await fetch('https://mock.invalid' + path, {
+      await fetch(path, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),

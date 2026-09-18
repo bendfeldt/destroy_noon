@@ -45,6 +45,36 @@ Run `dry-run` before `submit`. Download the artifact and check:
 
 Every run uploads its screenshots and page dumps as an artifact, kept 7 days.
 
+## How to verify it actually posted
+
+A screenshot only proves the page changed. The evidence is the HTTP exchange, so
+a `submit` run records every state-changing request and the server's response to
+it, then prints a verdict:
+
+```
+--- Did it post? ---
+  POST https://.../api/review -> HTTP 200
+
+POSTED: 1 request(s) accepted by the server.
+```
+
+Three outcomes:
+
+- **POSTED** — the server accepted it. `out/sent-requests.json` has the exact
+  request body sent and the response body returned, so you can read back the
+  comment text the server received.
+- **NOT POSTED** — everything failed or was rejected. Nothing landed; the reason
+  is in the log and the JSON.
+- **INCONCLUSIVE** — the page issued no state-changing request at all. Either the
+  submission happens some way this didn't catch, or the click didn't do what we
+  assumed. Check `out/4-final.png`.
+
+Cross-check it two further ways:
+
+1. `out/4-final.png` should show whatever confirmation the page gives.
+2. Reload the rating URL in your own browser afterwards. Many rating pages show
+   an "already rated" or thank-you state once they have your response.
+
 ### If the page changes
 
 The scripts match the sentiment button on its **exact** accessible name — substring
@@ -81,9 +111,15 @@ buttons, then a comment box and submit button — and fires a POST on the choice
 click, so the dry-run blocking can be verified:
 
 ```bash
-REVIEW_URL="file://$PWD/test/mock-form.html" \
-REVIEW_CHOICE="Very Unsatisfied" REVIEW_COMMENT="test" SUBMIT=false npm run submit
+node test/serve-mock.mjs 8787 &
+
+REVIEW_URL="http://127.0.0.1:8787/" \
+REVIEW_CHOICE="Very Unsatisfied" REVIEW_COMMENT="test" SUBMIT=true npm run submit
 ```
+
+`test/serve-mock.mjs` accepts the POSTs and returns 200, so this exercises the
+full verification path end to end — the run should report `POSTED`, and the
+server log echoes the payload it received.
 
 ## Notes
 
