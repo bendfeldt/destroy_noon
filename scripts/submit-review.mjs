@@ -139,6 +139,45 @@ async function findSubmit(page) {
 }
 
 /**
+ * Re-fetch the record that was just written, so the stored review can be read
+ * back rather than inferred from a status code. A PATCH that returns 204 proves
+ * the server accepted the change but shows nothing of what it kept.
+ *
+ * Only URLs that address a single record are re-fetched. A collection endpoint
+ * would return everyone else's feedback, which is none of our business.
+ */
+function addressesOneRecord(url) {
+  return /[?&]id=eq\.[^&]+/i.test(url)
+    || /\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\?|$)/i.test(url);
+}
+
+async function readBack(page, recorder) {
+  const targets = recorder.replay.filter((r) => r.method !== 'GET' && addressesOneRecord(r.url));
+
+  console.log('\n--- Read-back check ---');
+  if (targets.length === 0) {
+    console.log('Skipped: no request addressed a single record, so there is nothing');
+    console.log('safe to re-read (a collection endpoint would return other people\'s data).');
+    return null;
+  }
+
+  const results = [];
+  for (const target of targets) {
+    try {
+      const res = await page.request.get(target.url, { headers: target.headers });
+      const body = (await res.text()).replace(/\s+/g, ' ').trim();
+      console.log(`  GET ${target.url} -> HTTP ${res.status()}`);
+      console.log(`      stored: ${body.slice(0, 600)}${body.length > 600 ? ' […]' : ''}`);
+      results.push({ url: target.url, status: res.status(), body: body.slice(0, 2000) });
+    } catch (err) {
+      console.log(`  GET ${target.url} -> failed: ${err.message.split('\n')[0]}`);
+      results.push({ url: target.url, error: err.message.split('\n')[0] });
+    }
+  }
+  return results;
+}
+
+/**
  * Say plainly whether anything actually reached the server. A page that looks
  * like it accepted the review proves nothing on its own.
  */
@@ -257,6 +296,9 @@ async function main() {
       await recorder.settled();
       await writeFile(`${OUT}/sent-requests.json`, JSON.stringify(recorder.sent, null, 2), 'utf8');
       reportOutcome(recorder.sent, recorder.navigations);
+
+      const stored = await readBack(page, recorder);
+      if (stored) await writeFile(`${OUT}/read-back.json`, JSON.stringify(stored, null, 2), 'utf8');
     }
   } finally {
     await browser.close();

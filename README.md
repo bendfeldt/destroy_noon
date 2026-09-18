@@ -84,6 +84,40 @@ the live form turns out to work that way, the dry run will show a single blocked
 request and stop there — that is expected, not a failure. You will not get a
 preview of the comment box before committing to a real run.
 
+### Read-back check
+
+A status code says the server accepted the write; it does not show what was
+kept. A `204 No Content` — which is what the live backend returns when the
+comment is attached — carries no body at all.
+
+So after submitting, the run re-fetches the record it just wrote and prints it:
+
+```
+--- Read-back check ---
+  GET .../ratings?id=eq.b379487b-... -> HTTP 200
+      stored: [{"id":"b379487b-...","choice":"Very Unsatisfied","comment":"The food is ..."}]
+```
+
+That is the review as the server actually holds it, and it is also written to
+`out/read-back.json`.
+
+Only URLs that address a **single record** are re-fetched. A collection endpoint
+would return everyone else's feedback, which is none of our business, so the
+check is skipped with a note rather than run. Navigation-style flows have no such
+URL, so they skip it too.
+
+### What ends up in the artifact
+
+Request headers are redacted before they are written — `Authorization`, `apikey`,
+`Cookie` and similar become `[redacted]`, because the artifact is downloadable
+and kept for a week.
+
+The page dumps (`*.html`) are a different matter: they are verbatim page source.
+If a page embeds a key inline, it will appear there. For this site that is the
+Supabase anon key, which is public by design and shipped to every visitor, so it
+is not a credential leak — but the dumps are page source, not a sanitised export,
+and are worth treating as such.
+
 Cross-check it two further ways:
 
 1. `out/4-final.png` should show whatever confirmation the page gives.

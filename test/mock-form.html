@@ -33,40 +33,44 @@
   <p id="done">Thanks for your feedback!</p>
 
 <script>
-  let picked = null;
-  document.querySelectorAll('#step1 button').forEach(b => b.addEventListener('click', () => {
-    picked = b.textContent.trim();
+  // Mirrors the live page's shape: choosing creates the record and returns its
+  // id, submitting PATCHes the comment onto that id. Read-back then re-fetches
+  // it by id.
+  let recordId = null;
+
+  document.querySelectorAll('#step1 button').forEach(b => b.addEventListener('click', async () => {
+    const picked = b.textContent.trim();
     document.querySelectorAll('#step1 button').forEach(o => o.classList.toggle('picked', o === b));
     document.getElementById('step2').style.display = 'block';
+
     // Stand-in for the Cloudflare RUM beacon the live page fires, so the
     // telemetry filtering is exercised rather than assumed.
-    post('/cdn-cgi/rum?', { t: 'nav' });
-    // The real page may well register the choice at this point, so the mock
-    // fires a request here too — a dry run must block it.
-    post('/api/choice', { choice: picked });
+    send('POST', '/cdn-cgi/rum?', { t: 'nav' });
+
+    const created = await send('POST', '/rest/v1/ratings?select=*', { choice: picked });
+    if (created && created[0]) recordId = created[0].id;
   }));
 
   document.getElementById('send').addEventListener('click', async () => {
-    const text = document.querySelector('textarea').value;
-    post('/api/review', { choice: picked, comment: text });
-    // Shown regardless of the network result — the mock exists to exercise the
-    // script's traversal, not to be a real backend.
+    const comment = document.querySelector('textarea').value;
+    await send('PATCH', '/rest/v1/ratings?id=eq.' + recordId, { comment });
     document.getElementById('step1').style.display = 'none';
     document.getElementById('step2').style.display = 'none';
     document.getElementById('done').style.display = 'block';
   });
 
-  async function post(path, payload) {
+  async function send(method, path, payload) {
     try {
-      await fetch(path, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
+      const res = await fetch(path, {
+        method,
+        headers: { 'content-type': 'application/json', apikey: 'test-anon-key' },
         body: JSON.stringify(payload),
       });
-      return true;
+      if (res.status === 204) return null;
+      return await res.json();
     } catch (e) {
-      console.log('POST failed (blocked or offline):', path);
-      return false;
+      console.log('request failed (blocked or offline):', method, path);
+      return null;
     }
   }
 </script>

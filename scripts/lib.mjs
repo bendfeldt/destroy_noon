@@ -110,10 +110,25 @@ export async function blockMutations(page) {
  * which resolves once every in-flight read has finished. Call it before writing
  * results out, otherwise a late-arriving response can be missed entirely.
  */
+const SENSITIVE_HEADERS = ['authorization', 'apikey', 'api-key', 'cookie', 'x-api-key', 'x-supabase-auth'];
+
+function redactHeaders(headers) {
+  const out = {};
+  for (const [k, v] of Object.entries(headers)) {
+    out[k] = SENSITIVE_HEADERS.includes(k.toLowerCase()) ? '[redacted]' : v;
+  }
+  return out;
+}
+
 export function recordMutations(page) {
   const sent = [];
   const navigations = [];
+  const replay = [];
   const pending = new Set();
+  // A request that already produced a response can still fire 'requestfailed'
+  // — a 204 has no body, so the browser cancels the stream and reports
+  // ERR_ABORTED. Counting both made a clean submission read as PARTIAL.
+  const responded = new Set();
 
   page.on('response', (response) => {
     const request = response.request();
@@ -132,8 +147,20 @@ export function recordMutations(page) {
     } catch {
       // Not always readable; the status is the part that matters.
     }
+    responded.add(request);
     sent.push(entry);
     console.log(`  [sent] ${method} ${request.url()} -> HTTP ${response.status()}${entry.isNavigation ? ' (navigation)' : ''}`);
+
+    // Keep the real headers in memory so the record can be read back, but never
+    // let credentials reach the artifact — it is downloadable and kept for days.
+    const headerRead = request.allHeaders()
+      .then((headers) => {
+        replay.push({ url: request.url(), method, headers });
+        entry.headers = redactHeaders(headers);
+      })
+      .catch(() => {})
+      .finally(() => pending.delete(headerRead));
+    pending.add(headerRead);
 
     // Body reads race with navigation, so track them and tolerate failure.
     const read = response.text()
@@ -146,6 +173,7 @@ export function recordMutations(page) {
   page.on('requestfailed', (request) => {
     const method = request.method();
     if (method === 'GET' || method === 'HEAD') return;
+    if (responded.has(request)) return;
     const failure = request.failure()?.errorText ?? 'unknown error';
     sent.push({ method, url: request.url(), status: null, ok: false, failure });
     console.log(`  [FAILED] ${method} ${request.url()} -> ${failure}`);
@@ -160,6 +188,7 @@ export function recordMutations(page) {
   return {
     sent,
     navigations,
+    replay,
     settled: () => Promise.all([...pending]),
   };
 }
