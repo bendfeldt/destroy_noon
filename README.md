@@ -69,6 +69,17 @@ Three outcomes:
   submission happens some way this didn't catch, or the click didn't do what we
   assumed. Check `out/4-final.png`.
 
+Both submission styles are handled: a `fetch`/XHR call, and a classic form POST
+that navigates the whole page. Navigation posts are marked `isNavigation` in the
+JSON, and the confirmation page's own HTML is captured as the response body — so
+"Thanks for your feedback" ends up in the evidence file, not just in a screenshot.
+
+**A limitation of dry runs on navigation-style forms.** Blocking the first POST
+means the page never advances, so a dry run can only ever show you step one. If
+the live form turns out to work that way, the dry run will show a single blocked
+request and stop there — that is expected, not a failure. You will not get a
+preview of the comment box before committing to a real run.
+
 Cross-check it two further ways:
 
 1. `out/4-final.png` should show whatever confirmation the page gives.
@@ -117,9 +128,15 @@ REVIEW_URL="http://127.0.0.1:8787/" \
 REVIEW_CHOICE="Very Unsatisfied" REVIEW_COMMENT="test" SUBMIT=true npm run submit
 ```
 
-`test/serve-mock.mjs` accepts the POSTs and returns 200, so this exercises the
+`test/serve-mock.mjs` serves both shapes and returns 200, so this exercises the
 full verification path end to end — the run should report `POSTED`, and the
 server log echoes the payload it received.
+
+- `http://127.0.0.1:8787/` — the fetch/XHR flow
+- `http://127.0.0.1:8787/form` — a no-JavaScript flow where every step is a form
+  POST that navigates the page
+
+Run against both when changing the recording logic; they exercise different paths.
 
 ## Notes
 

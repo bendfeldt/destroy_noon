@@ -28,10 +28,28 @@ function log(step, msg) {
   console.log(`[${step}] ${msg}`);
 }
 
+/**
+ * Capture the page state. Tolerant of navigation: if the page is mid-flight the
+ * execution context can be torn down under us, and losing a screenshot is not a
+ * reason to abandon a submission that already happened.
+ */
 async function dump(page, name) {
-  await page.screenshot({ path: `${OUT}/${name}.png`, fullPage: true });
-  await writeFile(`${OUT}/${name}.html`, await page.content(), 'utf8');
-  await writeFile(`${OUT}/${name}-controls.json`, JSON.stringify(await describeControls(page), null, 2), 'utf8');
+  try {
+    await page.waitForLoadState('domcontentloaded', { timeout: 10000 });
+  } catch {
+    // Carry on and capture whatever is there.
+  }
+  try {
+    await page.screenshot({ path: `${OUT}/${name}.png`, fullPage: true });
+  } catch (err) {
+    log('dump', `screenshot ${name} failed: ${err.message.split('\n')[0]}`);
+  }
+  try {
+    await writeFile(`${OUT}/${name}.html`, await page.content(), 'utf8');
+    await writeFile(`${OUT}/${name}-controls.json`, JSON.stringify(await describeControls(page), null, 2), 'utf8');
+  } catch (err) {
+    log('dump', `page dump ${name} failed: ${err.message.split('\n')[0]}`);
+  }
 }
 
 async function firstVisible(page, candidates) {
@@ -124,12 +142,18 @@ async function findSubmit(page) {
  * Say plainly whether anything actually reached the server. A page that looks
  * like it accepted the review proves nothing on its own.
  */
-function reportOutcome(sent) {
+function reportOutcome(sent, navigations = []) {
   console.log('\n--- Did it post? ---');
 
   if (sent.length === 0) {
     console.log('INCONCLUSIVE: the page sent no state-changing request at all.');
-    console.log('Either the form posts in a way this missed, or nothing was recorded.');
+    if (navigations.length > 1) {
+      console.log('The page did navigate, so something happened:');
+      for (const url of navigations) console.log(`  -> ${url}`);
+      console.log('If the last URL looks like a confirmation page, it probably went through.');
+    } else {
+      console.log('The page never navigated either, so most likely nothing was sent.');
+    }
     console.log('Check out/4-final.png to see what the page is showing.');
     return;
   }
@@ -143,7 +167,9 @@ function reportOutcome(sent) {
   }
 
   if (succeeded.length > 0 && failed.length === 0) {
-    console.log(`\nPOSTED: ${succeeded.length} request(s) accepted by the server.`);
+    const navPosts = succeeded.filter((r) => r.isNavigation).length;
+    const via = navPosts > 0 ? ` (${navPosts} as a page navigation)` : '';
+    console.log(`\nPOSTED: ${succeeded.length} request(s) accepted by the server${via}.`);
   } else if (succeeded.length > 0) {
     console.log(`\nPARTIAL: ${succeeded.length} accepted, ${failed.length} failed. Check the list above.`);
   } else {
@@ -171,10 +197,10 @@ async function main() {
   await mkdir(OUT, { recursive: true });
   const { browser, page } = await launch();
   let blocked = [];
-  let sent = [];
+  let recorder = null;
 
   try {
-    if (reallySubmit) sent = recordMutations(page);
+    if (reallySubmit) recorder = recordMutations(page);
     else blocked = await blockMutations(page);
 
     const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
@@ -212,8 +238,9 @@ async function main() {
       console.log('Check out/blocked-requests.json to see exactly what a real run would send,');
       console.log('and out/4-final.png for how far the flow got. Nothing was recorded.');
     } else {
-      await writeFile(`${OUT}/sent-requests.json`, JSON.stringify(sent, null, 2), 'utf8');
-      reportOutcome(sent);
+      await recorder.settled();
+      await writeFile(`${OUT}/sent-requests.json`, JSON.stringify(recorder.sent, null, 2), 'utf8');
+      reportOutcome(recorder.sent, recorder.navigations);
     }
   } finally {
     await browser.close();
