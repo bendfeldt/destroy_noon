@@ -11,7 +11,9 @@ const OUT = 'out';
 
 async function main() {
   const url = requireEnv('REVIEW_URL');
-  console.log(`Inspecting ${url}`);
+  console.log(`URL  : ${url}`);
+  console.log('Mode : INSPECT — the page is only read. Nothing is clicked, and no');
+  console.log('       review is submitted. Re-run with mode "submit" to send one.\n');
 
   await mkdir(OUT, { recursive: true });
   const { browser, page } = await launch();
@@ -41,6 +43,7 @@ async function main() {
     }
 
     console.log(`\nWrote ${OUT}/page.png, ${OUT}/page.html, ${OUT}/controls.json`);
+    console.log('\nNo review was submitted — this was an inspect run.');
   } finally {
     await browser.close();
   }

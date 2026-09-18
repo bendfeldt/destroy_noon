@@ -181,8 +181,11 @@ export function recordMutations(page) {
 
   page.on('framenavigated', (frame) => {
     if (frame !== page.mainFrame()) return;
-    navigations.push(frame.url());
-    console.log(`  [navigated] ${frame.url()}`);
+    const url = frame.url();
+    // A single load can fire several times with the same URL; only note changes.
+    if (navigations[navigations.length - 1] === url) return;
+    navigations.push(url);
+    console.log(`  [navigated] ${url}`);
   });
 
   return {
@@ -217,4 +220,22 @@ const TELEMETRY_PATTERNS = [
 
 export function isTelemetry(url) {
   return TELEMETRY_PATTERNS.some((re) => re.test(url));
+}
+
+/**
+ * Strip headers that cannot be replayed on a new request. An HTTP/2 capture
+ * carries pseudo-headers (":authority", ":method", ":path", ":scheme") which are
+ * not valid header names to send, and the body headers of the original request
+ * do not apply to a GET. The live site is HTTP/2, so a naive replay fails with
+ * `Header name must be a valid HTTP token [":authority"]`.
+ */
+export function replayableHeaders(headers) {
+  const skip = ['content-length', 'content-type', 'accept-encoding'];
+  const out = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (k.startsWith(':')) continue;
+    if (skip.includes(k.toLowerCase())) continue;
+    out[k] = v;
+  }
+  return out;
 }

@@ -5,14 +5,14 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'What to do'
+        description: 'What to do (submit sends one review immediately)'
         type: choice
         required: true
-        default: inspect
+        default: submit
         options:
-          - inspect    # dump the form structure + screenshot, click nothing
-          - dry-run    # walk the flow with all non-GET requests blocked
           - submit     # walk the flow for real, once
+          - dry-run    # walk the flow with all non-GET requests blocked
+          - inspect    # dump the form structure + screenshot, click nothing
       choice:
         description: 'Which sentiment button to click'
         type: choice
@@ -33,6 +33,9 @@ on:
         type: string
         required: true
         default: 'https://kwikrate.com/rate/be65d074-6580-4663-a0fa-016717d7da89'
+
+permissions:
+  contents: read
 
 # One run at a time, and never cancel a run mid-submit.
 concurrency:

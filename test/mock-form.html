@@ -54,9 +54,9 @@
   document.getElementById('send').addEventListener('click', async () => {
     const comment = document.querySelector('textarea').value;
     await send('PATCH', '/rest/v1/ratings?id=eq.' + recordId, { comment });
-    document.getElementById('step1').style.display = 'none';
-    document.getElementById('step2').style.display = 'none';
-    document.getElementById('done').style.display = 'block';
+    // The live site redirects once the review is accepted; mirror that so the
+    // redirect reporting is exercised.
+    window.location.href = '/thanks';
   });
 
   async function send(method, path, payload) {

@@ -18,7 +18,7 @@
  * button may itself be the submission.
  */
 import { mkdir, writeFile } from 'node:fs/promises';
-import { launch, requireEnv, settle, describeControls, blockMutations, recordMutations, isTelemetry } from './lib.mjs';
+import { launch, requireEnv, settle, describeControls, blockMutations, recordMutations, isTelemetry, replayableHeaders } from './lib.mjs';
 
 const OUT = 'out';
 
@@ -139,6 +139,25 @@ async function findSubmit(page) {
 }
 
 /**
+ * Accepting a review redirects the page. Show that trail explicitly — it is the
+ * application's own confirmation that the submission was taken, independent of
+ * any HTTP status.
+ */
+function reportNavigation(navigations, finalUrl, startUrl) {
+  console.log('\n--- Where the page ended up ---');
+  if (navigations.length <= 1 && finalUrl === startUrl) {
+    console.log(`  No redirect — still on ${finalUrl}`);
+    return;
+  }
+  for (const [i, url] of navigations.entries()) {
+    console.log(`  ${i === 0 ? '   ' : '-> '}${url}`);
+  }
+  if (navigations[navigations.length - 1] !== finalUrl) console.log(`  -> ${finalUrl}`);
+  console.log(`\n  Final URL: ${finalUrl}`);
+  if (finalUrl !== startUrl) console.log('  The page redirected after submitting, which is the site confirming it.');
+}
+
+/**
  * Re-fetch the record that was just written, so the stored review can be read
  * back rather than inferred from a status code. A PATCH that returns 204 proves
  * the server accepted the change but shows nothing of what it kept.
@@ -164,7 +183,7 @@ async function readBack(page, recorder) {
   const results = [];
   for (const target of targets) {
     try {
-      const res = await page.request.get(target.url, { headers: target.headers });
+      const res = await page.request.get(target.url, { headers: replayableHeaders(target.headers) });
       const body = (await res.text()).replace(/\s+/g, ' ').trim();
       console.log(`  GET ${target.url} -> HTTP ${res.status()}`);
       console.log(`      stored: ${body.slice(0, 600)}${body.length > 600 ? ' […]' : ''}`);
@@ -188,7 +207,14 @@ function reportOutcome(all, navigations = []) {
   const sent = all.filter((r) => !isTelemetry(r.url));
   const beacons = all.filter((r) => isTelemetry(r.url));
   if (beacons.length > 0) {
-    console.log(`(ignoring ${beacons.length} analytics beacon(s): ${beacons.map((b) => new URL(b.url).host).join(', ')})`);
+    const hosts = beacons.map((b) => {
+      try {
+        return new URL(b.url).host;
+      } catch {
+        return b.url.slice(0, 60);
+      }
+    });
+    console.log(`(ignoring ${beacons.length} analytics beacon(s): ${hosts.join(', ')})`);
   }
 
   if (sent.length === 0) {
@@ -260,6 +286,7 @@ async function main() {
 
     const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
     log('load', `HTTP ${response?.status()}`);
+    const startUrl = page.url();
     await settle(page);
     await dump(page, '1-loaded');
 
@@ -281,7 +308,14 @@ async function main() {
       log('submit', `found submit via ${submit.label} (not clicking — dry run)`);
     } else {
       log('submit', `matched via ${submit.label}`);
+      const urlBeforeSubmit = page.url();
       await submit.locator.click({ timeout: 15000 });
+      // The redirect can arrive after the network goes quiet, so wait for the
+      // URL to change rather than assuming settle() outlasts it.
+      await page
+        .waitForURL((u) => u.toString() !== urlBeforeSubmit, { timeout: 15000 })
+        .then(() => log('submit', `redirected to ${page.url()}`))
+        .catch(() => log('submit', 'no redirect within 15s'));
       await settle(page, 8000);
     }
 
@@ -293,12 +327,24 @@ async function main() {
       console.log('Check out/blocked-requests.json to see exactly what a real run would send,');
       console.log('and out/4-final.png for how far the flow got. Nothing was recorded.');
     } else {
-      await recorder.settled();
-      await writeFile(`${OUT}/sent-requests.json`, JSON.stringify(recorder.sent, null, 2), 'utf8');
-      reportOutcome(recorder.sent, recorder.navigations);
+      // The submission has already happened by this point. Reporting on it must
+      // never fail the run: a red X on a submitted review invites a re-run, and
+      // a re-run means a duplicate review that cannot be taken back.
+      try {
+        await recorder.settled();
+        await writeFile(`${OUT}/sent-requests.json`, JSON.stringify(recorder.sent, null, 2), 'utf8');
+        reportOutcome(recorder.sent, recorder.navigations);
+        reportNavigation(recorder.navigations, page.url(), startUrl);
 
-      const stored = await readBack(page, recorder);
-      if (stored) await writeFile(`${OUT}/read-back.json`, JSON.stringify(stored, null, 2), 'utf8');
+        const stored = await readBack(page, recorder);
+        if (stored) await writeFile(`${OUT}/read-back.json`, JSON.stringify(stored, null, 2), 'utf8');
+      } catch (err) {
+        console.error(`\nReporting failed after the submission: ${err.message.split('\n')[0]}`);
+        console.error('IMPORTANT: this is a reporting error, not a failed submission.');
+        console.error('The review was already sent before this point. Do NOT re-run to');
+        console.error('"try again" — check out/4-final.png and the log above first, or you');
+        console.error('will submit a second review.');
+      }
     }
   } finally {
     await browser.close();
